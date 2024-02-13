@@ -1318,15 +1318,16 @@ class Controller:
 
         # Old @wake_up decorator condensed here
         if wake_if_asleep:
-            # At this point the car_api_id contains either the car_id or the vin
             car_api_id = path_vars.get("vehicle_id")
-            car_vin = car_api_id if self._use_vin_as_vehicle_id else self._id_to_vin(car_api_id)
-            car_id = car_api_id if not self._use_vin_as_vehicle_id else self._vin_to_id(car_api_id)
-
-            if not car_id:
+            if not car_api_id:
                 raise ValueError(
                     "wake_if_asleep only supported on endpoints with 'vehicle_id' path variable"
                 )
+
+            # At this point the car_api_id contains either the car_id or the vin
+            car_vin = car_api_id if self._use_vin_as_vehicle_id else self._id_to_vin(car_api_id)
+            car_id = car_api_id if not self._use_vin_as_vehicle_id else self._vin_to_id(car_api_id)
+
             # If we already know the car is asleep, go ahead and wake it
             if not self.is_car_online(car_id=car_id, vin=car_vin):
                 await self.wake_up(car_id=car_id)
