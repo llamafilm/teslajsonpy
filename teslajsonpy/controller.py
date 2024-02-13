@@ -188,6 +188,7 @@ class Controller:
         self._grid_status_unknown: Dict[int, bool] = {}
         self.cars: Dict[str, TeslaCar] = {}
         self.energysites: Dict[int, EnergySite] = {}
+        self._use_vin_as_vehicle_id: bool = api_proxy_url is not None and api_proxy_url != ""
 
     async def connect(
         self,
@@ -324,7 +325,7 @@ class Controller:
             response = (
                 await self.api(
                     "VEHICLE_DATA",
-                    path_vars={"vehicle_id": vin},
+                    path_vars={"vehicle_id": self._car_api_identifier_from_vin(vin)},
                     wake_if_asleep=wake_if_asleep,
                 )
             )["response"]
@@ -342,7 +343,7 @@ class Controller:
         return (
             await self.api(
                 "VEHICLE_SUMMARY",
-                path_vars={"vehicle_id": vin},
+                path_vars={"vehicle_id": self._car_api_identifier_from_vin(vin)},
                 wake_if_asleep=False,
             )
         )["response"]
@@ -400,7 +401,7 @@ class Controller:
                     ex.code,
                     ex.message,
                 )
-            self.cars[vin] = TeslaCar(car, self, self._vehicle_data[vin])
+            self.cars[vin] = TeslaCar(car, self, self._vehicle_data[vin], self._use_vin_as_vehicle_id)
 
         return self.cars
 
@@ -460,8 +461,10 @@ class Controller:
 
         return self.energysites
 
-    async def wake_up(self, car_vin) -> bool:
+    async def wake_up(self, car_id) -> bool:
         """Attempt to wake the car, returns True if successfully awakened."""
+        car_vin = self._id_to_vin(car_id)
+        car_id = self._update_id(car_id)
         async with self.__wakeup_lock[car_vin]:
             wake_start_time = time.time()
             wake_deadline = wake_start_time + WAKE_TIMEOUT
@@ -470,12 +473,14 @@ class Controller:
                 car_vin[-5:],
                 wake_deadline,
             )
+            car_api_identifier = self._car_api_identifier_from_vin(car_vin)
             result = await self.api(
-                "WAKE_UP", path_vars={"vehicle_id": car_vin}, wake_if_asleep=False
+                "WAKE_UP", path_vars={"vehicle_id": car_api_identifier}, wake_if_asleep=False
             )
             state = result.get("response", {}).get("state")
             self.set_car_online(
                 vin=car_vin,
+                car_id=car_id,
                 online_status=state == "online",
             )
             while not self.is_car_online(vin=car_vin) and time.time() < wake_deadline:
@@ -484,6 +489,7 @@ class Controller:
                 state = response.get("state")
                 self.set_car_online(
                     vin=car_vin,
+                    car_id=car_id,
                     online_status=state == "online",
                 )
 
@@ -493,7 +499,10 @@ class Controller:
                 time.time() - wake_start_time,
                 state,
             )
-            return self.is_car_online(vin=car_vin)
+            return self.is_car_online(
+                vin=car_vin,
+                car_id=car_id,
+            )
 
     def _calculate_next_interval(self, vin: Text) -> int:
         cur_time = round(time.time())
@@ -1131,9 +1140,26 @@ class Controller:
 
         return self._update_interval_vin.get(vin, self.update_interval)
 
+    def _car_api_identifier_from_vin(self, vin: Text) -> Optional[Text]:
+        """Return the relevant identifier to be used with the API. Vehicle id for owner API, vin for new Fleet API"""
+        if self._use_vin_as_vehicle_id:
+            return vin
+        else:
+            return self._vin_to_id(vin)
+
+    def _car_api_identifier_from_car_identifier(self, car_id: Text) -> Optional[Text]:
+        if self._use_vin_as_vehicle_id:
+            return self._id_to_vin(car_id)
+        else:
+            return car_id
+
     def _id_to_vin(self, car_id: Text) -> Optional[Text]:
         """Return vin for a car_id."""
         return self.__id_vin_map.get(str(car_id))
+
+    def _vin_to_id(self, vin: Text) -> Optional[Text]:
+        """Return car_id for a vin."""
+        return self.__vin_id_map.get(vin)
 
     def _vehicle_id_to_vin(self, vehicle_id: Text) -> Optional[Text]:
         """Return vin for a vehicle_id."""
@@ -1141,7 +1167,7 @@ class Controller:
 
     def _vehicle_id_to_id(self, vehicle_id: Text) -> Optional[Text]:
         """Return car_id for a vehicle_id."""
-        return self._vehicle_id_to_vin(vehicle_id)
+        return self._vin_to_id(self._vehicle_id_to_vin(vehicle_id))
 
     def vin_to_vehicle_id(self, vin: Text) -> Optional[Text]:
         """Return vehicle_id for a vin."""
@@ -1292,14 +1318,18 @@ class Controller:
 
         # Old @wake_up decorator condensed here
         if wake_if_asleep:
-            car_id = path_vars.get("vehicle_id")
+            # At this point the car_api_id contains either the car_id or the vin
+            car_api_id = path_vars.get("vehicle_id")
+            car_vin = car_api_id if self._use_vin_as_vehicle_id else self._id_to_vin(car_api_id)
+            car_id = car_api_id if not self._use_vin_as_vehicle_id else self._vin_to_id(car_api_id)
+
             if not car_id:
                 raise ValueError(
                     "wake_if_asleep only supported on endpoints with 'vehicle_id' path variable"
                 )
             # If we already know the car is asleep, go ahead and wake it
-            if not self.is_car_online(car_id=car_id):
-                await self.wake_up(car_vin=car_id)
+            if not self.is_car_online(car_id=car_id, vin=car_vin):
+                await self.wake_up(car_id=car_id)
                 return await self.__post_with_retries(
                     "", method=method, data=kwargs, url=uri
                 )
@@ -1317,7 +1347,7 @@ class Controller:
             # It may fail if the car slept since the last api update
             if not valid_result(response):
                 # Assumed it failed because it was asleep and we didn't know it
-                await self.wake_up(car_vin=car_id)
+                await self.wake_up(car_id=car_id)
                 response = await self.__post_with_retries(
                     "", method=method, data=kwargs, url=uri
                 )

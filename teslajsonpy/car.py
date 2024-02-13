@@ -43,7 +43,7 @@ class TeslaCar:
     by :meth:`teslajsonpy.controller.generate_car_objects`.
     """
 
-    def __init__(self, car: dict, controller, vehicle_data: dict) -> None:
+    def __init__(self, car: dict, controller, vehicle_data: dict, use_vin_as_vehicle_id: bool) -> None:
         """Initialize TeslaCar."""
         self._car = car
         self._controller = controller
@@ -52,6 +52,7 @@ class TeslaCar:
         self._previous_driver_temp = self.driver_temp_setting
         self._previous_fan_status = self.fan_status
         self._previous_passenger_temp = self.passenger_temp_setting
+        self._use_vin_as_vehicle_id = use_vin_as_vehicle_id
 
     @property
     def display_name(self) -> str:
@@ -751,7 +752,8 @@ class TeslaCar:
             **kwargs: Any additional parameters for the api call
 
         """
-        path_vars = {"vehicle_id": self.vin}
+        car_api_id = self.vin if self._use_vin_as_vehicle_id else self.id
+        path_vars = {"vehicle_id": car_api_id}
         if additional_path_vars:
             path_vars.update(additional_path_vars)
 
@@ -1127,7 +1129,7 @@ class TeslaCar:
 
     async def wake_up(self) -> None:
         """Send command to wake up."""
-        await self._controller.wake_up(car_vin=self.vin)
+        await self._controller.wake_up(car_id=self.id)
 
     async def toggle_trunk(self) -> None:
         """Actuate rear trunk."""
