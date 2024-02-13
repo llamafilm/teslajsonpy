@@ -3,11 +3,13 @@
 import pytest
 
 from teslajsonpy.controller import Controller
+from unittest.mock import patch, AsyncMock
 
 from tests.tesla_mock import (
     TeslaMock,
     VEHICLE_DATA,
     VIN,
+    CAR_ID
 )
 
 DAY_SELECTION_MAP = {
@@ -365,6 +367,54 @@ async def test_null_option_codes(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_correctly_sets_flag_with_custom_api(monkeypatch):
+    """Test change charge limit."""
+    TeslaMock(monkeypatch)
+    _controller = Controller(api_proxy_url="something")
+    await _controller.connect()
+    await _controller.generate_car_objects()
+    _car = _controller.cars[VIN]
+
+    assert _car._use_vin_as_vehicle_id is True
+
+@pytest.mark.asyncio
+async def test_correctly_sets_flag_with_default_api(monkeypatch):
+    """Test change charge limit."""
+    TeslaMock(monkeypatch)
+    _controller = Controller(None)
+    await _controller.connect()
+    await _controller.generate_car_objects()
+    _car = _controller.cars[VIN]
+
+    assert _car._use_vin_as_vehicle_id is False
+
+@pytest.mark.asyncio
+async def test_uses_vin_with_custom_api(monkeypatch):
+    """Test change charge limit."""
+    TeslaMock(monkeypatch)
+    _controller = Controller(api_proxy_url="something")
+    await _controller.connect()
+    await _controller.generate_car_objects()
+    _car = _controller.cars[VIN]
+
+    with patch('teslajsonpy.controller.Controller.api', new_callable=AsyncMock) as api_call:
+        assert await _car.change_charge_limit(70.0) is None
+        api_call.assert_called_with("CHANGE_CHARGE_LIMIT", path_vars={'vehicle_id': VIN}, wake_if_asleep=True, percent=70)
+
+@pytest.mark.asyncio
+async def test_uses_car_id_with_default_api(monkeypatch):
+    """Test change charge limit."""
+    TeslaMock(monkeypatch)
+    _controller = Controller(None)
+    await _controller.connect()
+    await _controller.generate_car_objects()
+    _car = _controller.cars[VIN]
+
+    with patch('teslajsonpy.controller.Controller.api', new_callable=AsyncMock) as api_call:
+        assert await _car.change_charge_limit(70.0) is None
+        api_call.assert_called_with("CHANGE_CHARGE_LIMIT", path_vars={'vehicle_id': CAR_ID}, wake_if_asleep=True, percent=70)
+
+@pytest.mark.asyncio
 async def test_change_charge_limit(monkeypatch):
     """Test change charge limit."""
     TeslaMock(monkeypatch)
@@ -374,7 +424,6 @@ async def test_change_charge_limit(monkeypatch):
     _car = _controller.cars[VIN]
 
     assert await _car.change_charge_limit(70.0) is None
-
 
 @pytest.mark.asyncio
 async def test_charge_port_door_open_close(monkeypatch):
